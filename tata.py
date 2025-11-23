@@ -18,11 +18,10 @@ from utils import aria2c, mp4decrpyt
 
 
 
-def find_channel(channel_name, data_json):
-    channel_name = channel_name.lower().strip()
-
+def find_channel_by_name(name, data_json):
+    name = name.lower().strip()
     for ch in data_json["data"]["channels"]:
-        if ch["name"].lower() == channel_name:
+        if ch["name"].lower() == name:
             return ch
     return None
 
@@ -188,58 +187,68 @@ def mux_video(audio_data, video_data, end_code, show_name, res, langs, time_data
 def ind_time():
     return datetime.now(timezone("Asia/Kolkata")).strftime('[%H:%M].[%d-%m-%Y]')
 
-
 def download_playback_catchup(channel, title, data_json, app, message):
-    msg = message.reply_text("<b>Processing…</b>")
+    msg = message.reply_text("<b>Processing...</b>")
 
-    time_data = ind_time()
-
-    # 1. get channel details
-    ch = find_channel(channel, data_json)
-    if not ch:
-        msg.edit("<b>Channel not found.</b>")
+    ch = find_channel_by_name(channel, data_json)
+    if ch is None:
+        msg.edit("<b>Channel Not Found in JSON</b>")
         return
-
+    
     stream_url = ch["stream_url"]
-    license_url = ch["license_url"]
     drm = ch["drm"]
     pssh = ch["pssh"]
     clearkey = ch["clearkey"]
-    quality = "auto"
+    license_url = ch["license_url"]
 
-    # 2. dynamic filename
+    # Extract ID from MPD URL  (.../i/57073.mpd)
+    try:
+        base_id = stream_url.split("/")[-1].replace(".mpd", "")
+    except:
+        msg.edit("<b>Invalid MPD URL</b>")
+        return
+
+    video_id = base_id
+    audio_id = base_id
+    quality = "HD"
+
+    time_data = ind_time()
+
     final_file_name = f"{title}.{time_data}.TATAPLAY.WEB-DL.{quality}.mkv".replace(" ", ".")
-
     msg.edit(f"<b>Downloading…</b>\n<code>{final_file_name}</code>")
 
-    # 3. parse MPD to extract IDs
-    audio_id, video_id = parse_mpd(stream_url)
-
-    # 4. download encrypted segments
+    # download encrypted fragments
     end_code = mpd_download(stream_url, audio_id, video_id, msg)
 
-    msg.edit(f"<b>Decrypting…</b>")
+    msg.edit("<b>Decrypting…</b>")
 
-    # 5. decrypt according to DRM type
-    if drm:
-        # Widevine
-        k = widevine_decrypt(pssh, license_url)
+    # ClearKey available?
+    if clearkey and clearkey.get("hex"):
+        k = clearkey["hex"].split(":")[1]  # right part only
     else:
-        # ClearKey available
-        k = clearkey["hex"].split(":")[1]
+        # DRM Widevine fallback
+        k = widevine_decrypt(pssh, license_url)
 
     decrypt(audio_id, video_id, k, end_code, msg)
 
-    msg.edit(f"<b>Muxing…</b>")
+    msg.edit("<b>Muxing…</b>")
+    filename = mux_video(audio_id, video_id, end_code, title, quality, ["aac"], time_data, msg)
 
-    filename = mux_video(audio_id, video_id, end_code, title, quality, ["aac2.0"], time_data, msg)
+    # upload
+    duration = get_duration(filename)
+    thumb = get_thumbnail(filename, "", duration / 2)
 
-    msg.edit(f"<b>Uploading…</b>")
+    caption = f"Downloaded\n{ch['name']}"
+    app.send_video(
+        video=filename,
+        chat_id=message.from_user.id,
+        caption=caption,
+        thumb=thumb,
+        duration=duration
+    )
 
-    send_final_video(app, message, filename, ch["name"])
-
+    os.remove(filename)
     msg.delete()
-   
 
 
 def download_catchup(catchup_url, data_json, app, message):
@@ -348,4 +357,5 @@ def download_catchup(catchup_url, data_json, app, message):
         os.remove(filename)
         
         msg.delete()
+
 
