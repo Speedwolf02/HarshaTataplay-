@@ -18,6 +18,14 @@ from utils import aria2c, mp4decrpyt
 
 
 
+def find_channel(channel_name, data_json):
+    channel_name = channel_name.lower().strip()
+
+    for ch in data_json["data"]["channels"]:
+        if ch["name"].lower() == channel_name:
+            return ch
+    return None
+
 def download_audio_stream(link, stream_format, filename, msg):
     try:
         cmd = [
@@ -182,49 +190,55 @@ def ind_time():
 
 
 def download_playback_catchup(channel, title, data_json, app, message):
-  msg = message.reply_text(f"<b>Processing...</b>")
+    msg = message.reply_text("<b>Processing…</b>")
 
-  time_data = ind_time()
-  
-  final_file_name = "{}.{}.{}.TATAPLAY.WEB-DL.AAC2.0.{}.H264-{}.mkv".format(title, time_data, data_json[channel][0]['quality'], "-".join(data_json[channel][0]['audio']) , GROUP_TAG).replace(" " , ".")
+    time_data = ind_time()
 
-  process_start_time = time.time()
-        
+    # 1. get channel details
+    ch = find_channel(channel, data_json)
+    if not ch:
+        msg.edit("<b>Channel not found.</b>")
+        return
 
-  msg.edit(f'''<b>Downloading...</b>\n<code>{final_file_name}</code>
-  ''')
+    stream_url = ch["stream_url"]
+    license_url = ch["license_url"]
+    drm = ch["drm"]
+    pssh = ch["pssh"]
+    clearkey = ch["clearkey"]
+    quality = "auto"
 
-  end_code = mpd_download(data_json[channel][0]['link'], data_json[channel][0]['audio_id'], data_json[channel][0]['video_id'], msg)
+    # 2. dynamic filename
+    final_file_name = f"{title}.{time_data}.TATAPLAY.WEB-DL.{quality}.mkv".replace(" ", ".")
 
-  msg.edit(f'''<b>Decrypting...</b>\n<code>{final_file_name}</code>
-        ''')
+    msg.edit(f"<b>Downloading…</b>\n<code>{final_file_name}</code>")
 
-  # Decrypting
-  dec = decrypt(data_json[channel][0]['audio_id'], data_json[channel][0]['video_id'], data_json[channel][0]['k'], end_code, msg)
-  msg.edit(f'''<b>Muxing...</b>\n<code>{final_file_name}</code>
-        ''')
+    # 3. parse MPD to extract IDs
+    audio_id, video_id = parse_mpd(stream_url)
 
-  # Muxing
-  filename = mux_video(data_json[channel][0]['audio_id'], data_json[channel][0]['video_id'], end_code, title, data_json[channel][0]['quality'], data_json[channel][0]['audio'], time_data, msg)
+    # 4. download encrypted segments
+    end_code = mpd_download(stream_url, audio_id, video_id, msg)
 
+    msg.edit(f"<b>Decrypting…</b>")
 
-  process_end_time = time.time()
+    # 5. decrypt according to DRM type
+    if drm:
+        # Widevine
+        k = widevine_decrypt(pssh, license_url)
+    else:
+        # ClearKey available
+        k = clearkey["hex"].split(":")[1]
 
-  size = humanbytes(os.path.getsize(filename))
-  duration = get_duration(filename)
-  thumb = get_thumbnail(filename, "", duration / 2)
-  start_time = time.time()
-  caption = DL_DONE_MSG.format(
-                  "Ripping" , get_readable_time(process_end_time - process_start_time) ,filename, data_json[channel][0]['title'] , size)
-  app.send_video(video=filename, chat_id = message.from_user.id , caption=caption , progress=progress_for_pyrogram, progress_args=("**Uploading...** \n", msg, start_time) , thumb=thumb, duration=duration , width=1280, height=720)
-          
+    decrypt(audio_id, video_id, k, end_code, msg)
 
-  os.remove(filename)
-          
-  msg.delete()
+    msg.edit(f"<b>Muxing…</b>")
 
-  
+    filename = mux_video(audio_id, video_id, end_code, title, quality, ["aac2.0"], time_data, msg)
 
+    msg.edit(f"<b>Uploading…</b>")
+
+    send_final_video(app, message, filename, ch["name"])
+
+    msg.delete()
    
 
 
@@ -334,3 +348,4 @@ def download_catchup(catchup_url, data_json, app, message):
         os.remove(filename)
         
         msg.delete()
+
