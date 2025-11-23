@@ -18,11 +18,13 @@ app = Client("RC_tplay_dl_bot", api_id=api_id, api_hash=api_hash, bot_token=bot_
 def tplay_past_catchup_dl_cmd_handler(app, message):
 
     auth_user = check_user(message)
+    if auth_user is None:
+        return
+
     try:
         data_json = get_tplay_data()
     except Exception as e:
         print(f"An error: {e}")
-    if auth_user is None:
         return
     
     if "/tata" in message.text:
@@ -31,14 +33,23 @@ def tplay_past_catchup_dl_cmd_handler(app, message):
             message.reply_text("<b>Syntax: </b>`/tata [channelName] | [filename]`")
             return
         
-        
-
         cmd = message.text.split("|")
-        _, channel = cmd[0].strip().split(" ")
+        left = cmd[0].strip()
+        _, channel = left.split(" ", 1)
+        channel = channel.strip().lower()
 
-        if channel not in data_json:
-            message.reply_text(f"<b>Channel Not in DB</b>")
+        # search in JSON
+        ch_data = next(
+            (ch for ch in data_json["data"]["channels"] 
+             if ch["name"].lower() == channel),
+            None
+        )
+
+        if not ch_data:
+            message.reply_text("<b>Channel Not in DB</b>")
             return
+
+        # HERE ch_data contains full info
 
         download_playback_catchup(channel, cmd[1].strip() , data_json, app, message)
 
